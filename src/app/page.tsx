@@ -68,6 +68,7 @@ function Gauge({ value, color, progress, center }: { value: number; color: strin
           const [x, y] = pt(a, 68);
           return <text key={t} x={x} y={y + 3} fontSize="8.5" fill="rgba(233,241,255,0.35)" textAnchor="middle" fontFamily="var(--mono)">{t >= 1000 ? "1G" : t}</text>;
         })}
+        <text x="100" y="171" textAnchor="middle" fontSize="8" fill="rgba(60,240,255,0.6)" fontFamily="var(--mono)" letterSpacing="0.5" fontWeight="600">HOW FAST IS YOUR INTERNET</text>
       </svg>
       <div className="center">{center}</div>
     </div>

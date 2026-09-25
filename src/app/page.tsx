@@ -6,6 +6,7 @@ import { coloName, distanceKm, fetchMeta, getGps, gpsAlreadyAllowed, maskIp, rev
 import { prayerTimes, WAJIB } from "@/lib/prayer";
 import { tanggalLengkap, zonaWaktu } from "@/lib/calendar";
 import { renderCard, shareCard, type CardData } from "@/lib/card";
+import { collectRecon, type Recon } from "@/lib/recon";
 
 const SURABAYA: [number, number] = [-7.2575, 112.7521];
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -79,6 +80,13 @@ const PHASE_TEXT: Record<Phase, string> = {
   idle: "Siap", latency: "Mengukur ping", download: "Mengukur unduh", upload: "Mengukur unggah", done: "Selesai", error: "Gagal"
 };
 
+function RGroup({ title, children }: { title: string; children: React.ReactNode }) {
+  return (<div className="rec-grp"><div className="rec-h">{title}</div><div className="rec-rows">{children}</div></div>);
+}
+function RRow({ k, v, mono }: { k: string; v: React.ReactNode; mono?: boolean }) {
+  return (<div className="rec-row"><span className="rk">{k}</span><span className={`rv${mono ? " mono" : ""}`}>{v}</span></div>);
+}
+
 export default function Page() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [lat, setLat] = useState<LatencyResult | null>(null);
@@ -109,8 +117,25 @@ export default function Page() {
   const [preview, setPreview] = useState<{ url: string; blob: Blob } | null>(null);
   const [showCoords, setShowCoords] = useState(false);
   const [fullIp, setFullIp] = useState(false);
+  const [recon, setRecon] = useState<Recon | null>(null);
+  const [reconOpen, setReconOpen] = useState(false);
+  const tapRef = useRef<{ n: number; t: number }>({ n: 0, t: 0 });
   const [toast, setToast] = useState("");
   const toastT = useRef<number>();
+
+  const tapLogo = () => {
+    const now = Date.now();
+    const r = tapRef.current;
+    r.n = now - r.t < 1200 ? r.n + 1 : 1;
+    r.t = now;
+    if (r.n >= 7) {
+      r.n = 0;
+      if (navigator.vibrate) navigator.vibrate([20, 40, 20]);
+      setReconOpen(true);
+      setRecon(null);
+      collectRecon().then(setRecon);
+    }
+  };
 
   const busy = phase === "latency" || phase === "download" || phase === "upload";
   const say = (m: string) => {
@@ -289,7 +314,7 @@ export default function Page() {
 
       <main className="app">
         <header className="top">
-          <div className="brand"><Logo />ZanNet
+          <div className="brand"><span className="logo-tap" onClick={tapLogo} role="button" aria-label="ZanNet"><Logo /></span>ZanNet
             <span className="pill" data-s={pillState} role="status"><span className="dot" />{PHASE_TEXT[phase]}</span>
           </div>
           <div className="clock mono">{now ? `${hhmm(now)}:${pad(now.getSeconds())}` : "--:--:--"}<small>{now ? zonaWaktu(now) : ""}</small></div>
@@ -392,6 +417,64 @@ export default function Page() {
             <div className="row2">
               <button className="btn ghost" onClick={() => window.open(`https://wa.me/?text=${encodeURIComponent(waText())}`, "_blank")}>Teks ke WA</button>
               <button className="btn primary" onClick={doShare} disabled={!preview}>Kirim gambar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {reconOpen && (
+        <div className="scrim recon-scrim" onClick={() => setReconOpen(false)}>
+          <div className="recon" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Panel recon">
+            <div className="rec-top">
+              <div><b>RECON</b> <span className="mono">#{recon?.fingerprint ?? "…"}</span><small>perangkat yang membuka halaman ini</small></div>
+              <button className="rec-x" onClick={() => setReconOpen(false)} aria-label="Tutup">✕</button>
+            </div>
+            <div className="rec-body">
+              <RGroup title="Jaringan">
+                <RRow k="IP publik" v={meta?.ip || "…"} mono />
+                <RRow k="ISP / ASN" v={[meta?.isp, meta?.asn].filter(Boolean).join(" · ") || "…"} />
+                <RRow k="Server edge" v={coloName(meta?.colo ?? "")} mono />
+                <RRow k="Lokasi IP" v={[meta?.city, meta?.region, meta?.country].filter(Boolean).join(", ") || "—"} />
+                <RRow k="Koneksi" v={recon ? `${recon.conn.type}${recon.conn.downlink ? ` · ~${recon.conn.downlink} Mbps` : ""}${recon.conn.rtt ? ` · rtt ${recon.conn.rtt}ms` : ""}` : "…"} mono />
+              </RGroup>
+              <RGroup title="IP lokal (WebRTC)">
+                {recon ? (
+                  recon.webrtc.ips.length ? recon.webrtc.ips.map((ip) => <RRow key={ip} k="→" v={ip} mono />)
+                  : <RRow k="→" v={recon.webrtc.masked ? "disamarkan (mDNS .local)" : "tidak bocor"} />
+                ) : <RRow k="→" v="memindai…" />}
+              </RGroup>
+              <RGroup title="Lokasi GPS">
+                {gps ? (<>
+                  <RRow k="Titik" v={`${gps.lat.toFixed(6)}, ${gps.lon.toFixed(6)}`} mono />
+                  <RRow k="Akurasi" v={`±${gps.acc.toFixed(0)} m${gps.alt != null ? ` · alt ${gps.alt.toFixed(0)} m` : ""}`} mono />
+                  <RRow k="Tempat" v={place ? [place.spot, place.area, place.city].filter(Boolean).join(", ") : "…"} />
+                </>) : <RRow k="Status" v={<button className="rec-link" onClick={() => locate()}>ketuk untuk aktifkan GPS</button>} />}
+              </RGroup>
+              <RGroup title="Perangkat">
+                <RRow k="Platform" v={recon?.device.platform ?? "…"} />
+                <RRow k="CPU · RAM" v={recon ? `${recon.device.cores ?? "?"} core · ${recon.device.ram ? recon.device.ram + " GB" : "?"}` : "…"} mono />
+                <RRow k="Layar" v={recon ? `${recon.screen.res} @${recon.screen.dpr}x · ${recon.screen.depth}-bit` : "…"} mono />
+                <RRow k="Sentuh · orient" v={recon ? `${recon.device.touch} titik · ${recon.screen.orient}` : "…"} mono />
+                <RRow k="Baterai" v={recon ? (recon.battery.supported ? `${recon.battery.level}%${recon.battery.charging ? " ⚡" : ""}` : "tak diekspos") : "…"} mono />
+              </RGroup>
+              <RGroup title="GPU (sidik jari)">
+                <RRow k="Vendor" v={recon?.gpu.vendor ?? "…"} />
+                <RRow k="Renderer" v={recon?.gpu.renderer ?? "…"} />
+              </RGroup>
+              <RGroup title="Lokal & browser">
+                <RRow k="Zona waktu" v={recon ? `${recon.locale.tz} (${recon.locale.offset})` : "…"} mono />
+                <RRow k="Bahasa" v={recon?.locale.langs ?? "…"} />
+                <RRow k="Cookie · DNT" v={recon ? `${recon.locale.cookies ? "aktif" : "mati"} · DNT ${recon.locale.dnt}` : "…"} />
+                <RRow k="Datang dari" v={recon?.extra.referrer ?? "…"} />
+                <RRow k="Penyimpanan" v={recon ? `${recon.storage.ls ? "localStorage ok" : "localStorage mati"} · kuota ${recon.storage.quota}` : "…"} mono />
+              </RGroup>
+              <RGroup title="User-Agent">
+                <div className="rec-ua mono">{recon?.device.ua ?? "…"}</div>
+              </RGroup>
+            </div>
+            <div className="rec-foot">
+              <button className="btn ghost" onClick={() => { navigator.clipboard?.writeText(JSON.stringify(recon, null, 2)); say("Data recon disalin (JSON)"); }} disabled={!recon}>Salin JSON</button>
+              <span>Hanya perangkat ini · bukan riwayat pengunjung</span>
             </div>
           </div>
         </div>

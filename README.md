@@ -1,40 +1,36 @@
-# ZanNet
+# ZANNET
 
-Internet speed test — dark command-desk UI. Deploy ke Vercel dengan project name `zannet`.
+Cloudflare-edge speed receipt. One viewport. Monospace. Screenshot-ready.
 
-## What it measures
+```
+ZANNET                                          LOCK ●
+RESULT 1790…                                 T+00:08.4
+DOWN        212.00 Mbps
+UP          117.95 Mbps
+RTT            54 ms
+SSID        RUMAH-ZAN                 manual
+PUB         114.8.218.235
+─────────────────────────────────────────────────────
+built by zandev.id                    v1.0 · cf-edge
+```
 
-- **Download** — stream ~20MB dari `speed.cloudflare.com/__down`
-- **Upload** — POST 8MB ke `speed.cloudflare.com/__up`
-- **Ping** — RTT sample ke edge yang sama (idle + rata-rata)
-- **Link intel** — Network Information API (tipe tautan) + ISP/ASN/city dari IP
-- **SSID** — browser **tidak** expose nama Wi‑Fi. Ada input label manual.
+## Engine
 
-## Local
+- Download `GET https://speed.cloudflare.com/__down?bytes=`
+- Upload `POST https://speed.cloudflare.com/__up`
+- RTT / jitter from zero-byte edge pings
+- Public IP / GEO / ASN via `ipapi.co`
+- SSID cannot be read by the browser — tap the `SSID` row and label it manually so it lands in the screenshot
+
+## Run
 
 ```bash
-npm install
+npm i
 npm run dev
 ```
 
-Buka http://localhost:3000
+## Deploy
 
-## Deploy Vercel
+Push this folder to GitHub, import on Vercel. No env vars required.
 
-1. Push folder ini ke GitHub (repo root = folder `zannet`).
-2. vercel.com → Add New Project → import repo.
-3. Project Name: `zannet` → domain jadi `zannet.vercel.app`.
-4. Framework Preset: Next.js. Build command default. Deploy.
-
-Atau CLI:
-
-```bash
-npx vercel --yes
-npx vercel --prod
-```
-
-## Notes
-
-- Angka bukan 1:1 dengan Speedtest.net (server & metodologi beda). Ini ukur path ke Cloudflare edge terdekat.
-- Cloudflare boleh kumpulin hasil agregat dari endpoint publik mereka.
-- Jangan expect SSID — itu OS-level, web lock.
+Built by [zandev.id](https://zandev.id)

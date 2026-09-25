@@ -1,8 +1,8 @@
 {
   "name": "zannet",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "ZANNET — Cloudflare-edge speed receipt. Built by zandev.id",
+  "description": "ZanNet — tes kecepatan internet via edge Cloudflare. Built by zandev.id",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

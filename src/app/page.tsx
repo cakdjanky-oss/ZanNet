@@ -1,285 +1,284 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  connectionHint,
+  fetchIntel,
+  measureDownload,
+  measurePing,
+  measureUpload,
+  type LinkIntel,
+  type Phase
+} from "@/lib/speed";
 
-const CF_DOWN = "https://speed.cloudflare.com/__down?bytes=";
-const CF_UP = "https://speed.cloudflare.com/__up";
-
-type Phase = "idle" | "ping" | "download" | "upload" | "done" | "error";
-
-type NetInfo = {
-  type: string;
-  effectiveType: string;
-  downlink: number | null;
-  rtt: number | null;
-  saveData: boolean;
-};
-
-function formatMbps(n: number | null) {
-  if (n == null) return "—";
-  return n.toFixed(2);
+function fmt(n: number | null, digits = 2) {
+  if (n === null || Number.isNaN(n)) return "—";
+  return n.toFixed(digits);
 }
 
-function connLabel(info: NetInfo | null) {
-  if (!info) return "Unknown";
-  const t = (info.type || "").toLowerCase();
-  if (t === "wifi") return "Wi‑Fi";
-  if (t === "cellular") return "Cellular";
-  if (t === "ethernet") return "Ethernet";
-  if (t === "wimax") return "WiMAX";
-  if (info.effectiveType) return info.effectiveType.toUpperCase();
-  return "Multi";
-}
-
-async function measurePing(samples = 6) {
-  const times: number[] = [];
-  for (let i = 0; i < samples; i++) {
-    const t0 = performance.now();
-    await fetch(`${CF_DOWN}1000&tid=${Math.random()}`, { cache: "no-store" });
-    times.push(performance.now() - t0);
-  }
-  times.sort((a, b) => a - b);
-  const core = times.slice(1, -1).length ? times.slice(1, -1) : times;
-  const avg = core.reduce((a, b) => a + b, 0) / core.length;
-  return { idle: Math.round(times[0]), loaded: Math.round(avg) };
-}
-
-async function measureDownload(onTick: (mbps: number) => void) {
-  const bytes = 20_000_000;
-  const t0 = performance.now();
-  const res = await fetch(`${CF_DOWN}${bytes}&tid=${Math.random()}`, {
-    cache: "no-store",
-  });
-  if (!res.body) throw new Error("no download stream");
-  const reader = res.body.getReader();
-  let received = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    received += value?.byteLength ?? 0;
-    const elapsed = (performance.now() - t0) / 1000;
-    if (elapsed > 0.12) onTick((received * 8) / elapsed / 1_000_000);
-  }
-  const elapsed = (performance.now() - t0) / 1000;
-  return (received * 8) / elapsed / 1_000_000;
-}
-
-async function measureUpload(onTick: (mbps: number) => void) {
-  const size = 8_000_000;
-  const payload = new Uint8Array(size);
-  crypto.getRandomValues(payload.subarray(0, Math.min(65536, size)));
-  const t0 = performance.now();
-  const res = await fetch(`${CF_UP}?tid=${Math.random()}`, {
-    method: "POST",
-    body: payload,
-    cache: "no-store",
-  });
-  if (!res.ok) throw new Error(`upload HTTP ${res.status}`);
-  const elapsed = (performance.now() - t0) / 1000;
-  const mbps = (size * 8) / elapsed / 1_000_000;
-  onTick(mbps);
-  return mbps;
-}
-
-export default function Home() {
-  const [phase, setPhase] = useState<Phase>("idle");
-  const [download, setDownload] = useState<number | null>(null);
-  const [upload, setUpload] = useState<number | null>(null);
-  const [pingIdle, setPingIdle] = useState<number | null>(null);
-  const [pingLoaded, setPingLoaded] = useState<number | null>(null);
-  const [status, setStatus] = useState("");
-  const [resultId, setResultId] = useState(() =>
-    String(Date.now() + Math.floor(Math.random() * 1e6))
+function Row({
+  k,
+  v,
+  extra
+}: {
+  k: string;
+  v: React.ReactNode;
+  extra?: React.ReactNode;
+}) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "7ch 1fr auto",
+        gap: 12,
+        alignItems: "baseline",
+        minHeight: 22,
+        fontSize: 13,
+        lineHeight: "22px"
+      }}
+    >
+      <span style={{ color: "#7a7a84", letterSpacing: "0.04em" }}>{k}</span>
+      <span className="num" style={{ color: "#e8e6de", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {v}
+      </span>
+      <span style={{ color: "#6b6b74", fontSize: 10 }}>{extra}</span>
+    </div>
   );
-  const [isp, setIsp] = useState("resolving…");
-  const [ip, setIp] = useState("");
-  const [city, setCity] = useState("");
-  const [net, setNet] = useState<NetInfo | null>(null);
-  const [ssidHint, setSsidHint] = useState("");
+}
+
+export default function Page() {
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [down, setDown] = useState<number | null>(null);
+  const [up, setUp] = useState<number | null>(null);
+  const [ping, setPing] = useState<number | null>(null);
+  const [jitter, setJitter] = useState<number | null>(null);
+  const [ssid, setSsid] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [intel, setIntel] = useState<LinkIntel | null>(null);
+  const [resultId, setResultId] = useState(() => Date.now().toString());
+  const [elapsed, setElapsed] = useState(0);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const conn = useMemo(() => connectionHint(), []);
 
   useEffect(() => {
-    const n = (navigator as Navigator & { connection?: any }).connection;
-    const read = () => {
-      if (!n) {
-        setNet({
-          type: "unknown",
-          effectiveType: "",
-          downlink: null,
-          rtt: null,
-          saveData: false,
-        });
-        return;
-      }
-      setNet({
-        type: n.type || n.effectiveType || "unknown",
-        effectiveType: n.effectiveType || "",
-        downlink: typeof n.downlink === "number" ? n.downlink : null,
-        rtt: typeof n.rtt === "number" ? n.rtt : null,
-        saveData: !!n.saveData,
-      });
-    };
-    read();
-    n?.addEventListener?.("change", read);
-    return () => n?.removeEventListener?.("change", read);
+    fetchIntel().then(setIntel);
   }, []);
 
   useEffect(() => {
-    let dead = false;
-    (async () => {
-      try {
-        const r = await fetch("https://ipapi.co/json/");
-        const j = await r.json();
-        if (dead) return;
-        setIsp(j.org || j.asn || "ISP unknown");
-        setIp(j.ip || "");
-        setCity([j.city, j.region, j.country_name].filter(Boolean).join(" · "));
-      } catch {
-        if (!dead) setIsp("ISP lookup blocked");
-      }
-    })();
-    return () => {
-      dead = true;
-    };
-  }, []);
+    if (!startedAt || phase === "idle" || phase === "done" || phase === "error") return;
+    const id = window.setInterval(() => setElapsed((performance.now() - startedAt) / 1000), 80);
+    return () => window.clearInterval(id);
+  }, [startedAt, phase]);
 
   const run = useCallback(async () => {
+    setResultId(Date.now().toString());
+    setDown(null);
+    setUp(null);
+    setPing(null);
+    setJitter(null);
+    setElapsed(0);
+    const t0 = performance.now();
+    setStartedAt(t0);
     try {
-      setResultId(String(Date.now() + Math.floor(Math.random() * 1e6)));
-      setDownload(null);
-      setUpload(null);
-      setPingIdle(null);
-      setPingLoaded(null);
-
       setPhase("ping");
-      setStatus("probing latency ke Cloudflare edge…");
       const p = await measurePing();
-      setPingIdle(p.idle);
-      setPingLoaded(p.loaded);
-
-      setPhase("download");
-      setStatus("download stream 20MB…");
-      const dl = await measureDownload((live) => setDownload(live));
-      setDownload(dl);
-
-      setPhase("upload");
-      setStatus("upload 8MB payload…");
-      const ul = await measureUpload((live) => setUpload(live));
-      setUpload(ul);
-
+      setPing(p.ping);
+      setJitter(p.jitter);
+      setPhase("down");
+      const d = await measureDownload((live) => setDown(live));
+      setDown(d);
+      setPhase("up");
+      const u = await measureUpload((live) => setUp(live));
+      setUp(u);
+      setElapsed((performance.now() - t0) / 1000);
       setPhase("done");
-      setStatus("signal locked");
-    } catch (e) {
+    } catch {
       setPhase("error");
-      setStatus(e instanceof Error ? e.message : "probe failed");
     }
   }, []);
 
-  const wifiName = useMemo(() => {
-    if (ssidHint.trim()) return ssidHint.trim();
-    const t = (net?.type || "").toLowerCase();
-    if (t === "wifi") return "SSID locked by browser";
-    if (t === "cellular") return "bukan Wi‑Fi — cellular radio";
-    if (t === "ethernet") return "kabel / tether";
-    return "SSID tidak terekspos ke web";
-  }, [net, ssidHint]);
-
-  const busy = phase === "ping" || phase === "download" || phase === "upload";
+  const locked = phase === "done";
+  const ssidValue = ssid.trim() ? ssid.trim() : "— locked";
 
   return (
-    <div className="app">
-      <header className="topbar">
-        <div className="brand">
-          <div className="brand-mark" />
-          ZANNET
+    <main
+      style={{
+        minHeight: "100dvh",
+        display: "flex",
+        flexDirection: "column",
+        maxWidth: 520,
+        margin: "0 auto",
+        padding: "18px 16px 0"
+      }}
+    >
+      <header
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          paddingBottom: 10,
+          borderBottom: "1px solid #22222a"
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span
+            style={{
+              width: 14,
+              height: 14,
+              background: "linear-gradient(135deg,#4da3ff,#7cffb2)",
+              display: "inline-block"
+            }}
+          />
+          <span style={{ letterSpacing: "0.18em", fontSize: 13, fontWeight: 600 }}>ZANNET</span>
         </div>
-        <div className="theme-toggle" aria-hidden />
+        <div style={{ fontSize: 11, color: locked ? "#7cffb2" : "#6b6b74", letterSpacing: "0.08em" }}>
+          {locked ? "LOCK ●" : phase === "idle" ? "READY" : phase === "error" ? "FAULT" : "PROBE"}
+        </div>
       </header>
-      <div className="rainbow" />
 
-      <div className="meta">
-        Result ID: <b>{resultId}</b>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          fontSize: 11,
+          color: "#6b6b74",
+          padding: "10px 0 16px"
+        }}
+      >
+        <span className="num">RESULT {resultId}</span>
+        <span className="num">T+{elapsed.toFixed(1).padStart(5, "0")}</span>
       </div>
 
-      <section className="card">
-        <div className="dl-label">
-          <span className="arrow">↓</span>
-          DOWNLOAD Mbps
+      <section
+        style={{
+          background: "#0c0c10",
+          border: "1px solid #22222a",
+          padding: "18px 16px 14px",
+          flex: "0 0 auto"
+        }}
+      >
+        <div style={{ display: "grid", gridTemplateColumns: "7ch 1fr auto", gap: 12, alignItems: "end", marginBottom: 10 }}>
+          <span style={{ color: "#7cffb2", fontSize: 11, letterSpacing: "0.08em" }}>DOWN</span>
+          <span className="num" style={{ fontSize: 36, lineHeight: 1, letterSpacing: "-0.03em" }}>
+            {fmt(down)}
+          </span>
+          <span style={{ color: "#6b6b74", fontSize: 11, paddingBottom: 4 }}>Mbps</span>
         </div>
-        <div className={`speed ${phase === "download" ? "live" : ""}`}>
-          {formatMbps(download)}
-        </div>
-
-        <div className="submetrics">
-          <div>
-            <span className="mini-label">UPLOAD Mbps</span>
-            <span className={phase === "upload" ? "live-num" : ""}>
-              {formatMbps(upload)}
-            </span>
-          </div>
-        </div>
-
-        <div className="pings">
-          <div>
-            Ping ms <span className="dot-y">●</span>{" "}
-            <span>{pingIdle ?? "—"}</span>
-          </div>
-          <div>
-            <span className="dot-g">●</span> <span>{pingLoaded ?? "—"}</span>
-          </div>
+        <div style={{ display: "grid", gridTemplateColumns: "7ch 1fr auto", gap: 12, alignItems: "end", marginBottom: 18 }}>
+          <span style={{ color: "#c8ccd4", fontSize: 11, letterSpacing: "0.08em" }}>UP</span>
+          <span className="num" style={{ fontSize: 28, lineHeight: 1, letterSpacing: "-0.03em" }}>
+            {fmt(up)}
+          </span>
+          <span style={{ color: "#6b6b74", fontSize: 11, paddingBottom: 2 }}>Mbps</span>
         </div>
 
-        <button className="btn" onClick={run} disabled={busy}>
-          {busy ? "Testing…" : phase === "idle" ? "Start Test" : "Test Again"}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+          <Row k="RTT" v={ping === null ? "—" : `${fmt(ping, 0)} ms`} />
+          <Row k="JITTER" v={jitter === null ? "—" : `${fmt(jitter, 0)} ms`} />
+        </div>
+
+        <div style={{ height: 1, background: "#22222a", margin: "4px 0 12px" }} />
+
+        <Row k="IFACE" v={`${conn.type} · ${conn.downlink}`} />
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "7ch 1fr auto",
+            gap: 12,
+            alignItems: "center",
+            minHeight: 22,
+            fontSize: 13
+          }}
+        >
+          <span style={{ color: "#7a7a84", letterSpacing: "0.04em" }}>SSID</span>
+          {editing ? (
+            <input
+              autoFocus
+              value={ssid}
+              onChange={(e) => setSsid(e.target.value)}
+              onBlur={() => setEditing(false)}
+              onKeyDown={(e) => e.key === "Enter" && setEditing(false)}
+              placeholder="nama wifi"
+              style={{
+                background: "transparent",
+                border: "none",
+                borderBottom: "1px solid #3a3a44",
+                color: "#e8e6de",
+                outline: "none",
+                fontSize: 13,
+                padding: "2px 0"
+              }}
+            />
+          ) : (
+            <button
+              onClick={() => setEditing(true)}
+              style={{
+                background: "none",
+                border: "none",
+                color: "#e8e6de",
+                textAlign: "left",
+                cursor: "text",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap"
+              }}
+            >
+              {ssidValue}
+            </button>
+          )}
+          <span style={{ color: "#6b6b74", fontSize: 10 }}>{ssid.trim() ? "manual" : "tap"}</span>
+        </div>
+        <Row k="EDGE" v="speed.cloudflare.com" />
+        <Row k="PUB" v={intel?.ip ?? "…"} />
+        <Row
+          k="GEO"
+          v={intel ? `${intel.city} · ${intel.region} · ${intel.country}` : "…"}
+        />
+        <Row k="ASN" v={intel ? `${intel.asn} ${intel.org}`.trim() : "…"} />
+
+        <button
+          onClick={run}
+          disabled={phase === "ping" || phase === "down" || phase === "up"}
+          style={{
+            marginTop: 16,
+            width: "100%",
+            height: 42,
+            background: "transparent",
+            color: "#e8e6de",
+            border: "1px solid #3d5cff",
+            cursor: "pointer",
+            letterSpacing: "0.08em",
+            fontSize: 12
+          }}
+        >
+          {phase === "idle" && "START TEST"}
+          {phase === "ping" && "PROBE RTT…"}
+          {phase === "down" && "PULL DOWN…"}
+          {phase === "up" && "PUSH UP…"}
+          {phase === "done" && "TEST AGAIN"}
+          {phase === "error" && "RETRY"}
         </button>
-        <div className="status">{status}</div>
       </section>
 
-      <p className="hint">
-        Engine nembak Cloudflare edge (`speed.cloudflare.com`). Browser{" "}
-        <b>tidak bisa baca SSID Wi‑Fi</b> — cuma tipe tautan + ISP dari public
-        IP. Isi label manual kalau mau nama jaringan tampil di footer.
-      </p>
+      <div style={{ flex: 1 }} />
 
-      <div className="panel">
-        <div className="intel">
-          <div className="intel-k">LINK INTEL</div>
-          <div className="intel-ip">{ip || "—"}</div>
-          <div className="intel-geo">{city || "geo pending"}</div>
-        </div>
-      </div>
-
-      <footer className="footer">
-        <div className="row">
-          <div className="ico">⇄</div>
-          <div>
-            Connections
-            <small>
-              {connLabel(net)}
-              {net?.effectiveType ? ` · ${net.effectiveType}` : ""}
-              {net?.downlink != null ? ` · est ${net.downlink} Mbps` : ""}
-            </small>
-          </div>
-        </div>
-        <div className="row">
-          <div className="ico">◉</div>
-          <div>
-            {isp}
-            <small>provider / ASN dari public IP — bukan SSID</small>
-          </div>
-        </div>
-        <div className="row">
-          <div className="ico">⌁</div>
-          <div style={{ flex: 1 }}>
-            Wi‑Fi name
-            <small>{wifiName}</small>
-            <input
-              value={ssidHint}
-              onChange={(e) => setSsidHint(e.target.value)}
-              placeholder="label SSID manual (opsional)"
-            />
-          </div>
-        </div>
+      <footer
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          height: 48,
+          borderTop: "1px solid #22222a",
+          fontSize: 11,
+          letterSpacing: "0.04em",
+          whiteSpace: "nowrap"
+        }}
+      >
+        <a href="https://zandev.id" style={{ color: "#c8ccd4", textDecoration: "none" }}>
+          <span style={{ color: "#6b6b74" }}>built by </span>zandev.id
+        </a>
+        <span style={{ color: "#6b6b74" }}>v1.0 · cf-edge · id</span>
       </footer>
-    </div>
+    </main>
   );
 }

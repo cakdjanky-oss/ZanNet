@@ -80,6 +80,23 @@ const PHASE_TEXT: Record<Phase, string> = {
   idle: "Siap", latency: "Mengukur ping", download: "Mengukur unduh", upload: "Mengukur unggah", done: "Selesai", error: "Gagal"
 };
 
+type VisitRow = { t: number; ip: string; city: string; region: string; country: string; ua: string; ref: string; lang: string; tz: string; screen: string; gpu: string; cores: number | null; ram: number | null; plat: string };
+
+function uaShort(ua: string) {
+  const os = /Android/i.test(ua) ? "Android" : /iPhone|iPad|iOS/i.test(ua) ? "iOS" : /Windows/i.test(ua) ? "Windows" : /Mac/i.test(ua) ? "macOS" : /Linux/i.test(ua) ? "Linux" : "?";
+  const br = /Edg/i.test(ua) ? "Edge" : /OPR|Opera/i.test(ua) ? "Opera" : /Chrome/i.test(ua) ? "Chrome" : /Firefox/i.test(ua) ? "Firefox" : /Safari/i.test(ua) ? "Safari" : "?";
+  return `${br} · ${os}`;
+}
+function ago(t: number) {
+  const s = Math.floor((Date.now() - t) / 1000);
+  if (s < 60) return `${s} dtk lalu`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} mnt lalu`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} jam lalu`;
+  return `${Math.floor(h / 24)} hr lalu`;
+}
+
 function RGroup({ title, children }: { title: string; children: React.ReactNode }) {
   return (<div className="rec-grp"><div className="rec-h">{title}</div><div className="rec-rows">{children}</div></div>);
 }
@@ -119,6 +136,12 @@ export default function Page() {
   const [fullIp, setFullIp] = useState(false);
   const [recon, setRecon] = useState<Recon | null>(null);
   const [reconOpen, setReconOpen] = useState(false);
+  const [reconTab, setReconTab] = useState<"device" | "visitors">("device");
+  const [adminKey, setAdminKey] = useState("");
+  const [visitors, setVisitors] = useState<VisitRow[] | null>(null);
+  const [visTotal, setVisTotal] = useState(0);
+  const [visErr, setVisErr] = useState("");
+  const [visLoading, setVisLoading] = useState(false);
   const tapRef = useRef<{ n: number; t: number }>({ n: 0, t: 0 });
   const [toast, setToast] = useState("");
   const toastT = useRef<number>();
@@ -132,10 +155,30 @@ export default function Page() {
       r.n = 0;
       if (navigator.vibrate) navigator.vibrate([20, 40, 20]);
       setReconOpen(true);
+      setReconTab("device");
       setRecon(null);
       collectRecon().then(setRecon);
+      try {
+        const k = localStorage.getItem("zannet.adminKey") || "";
+        if (k) { setAdminKey(k); loadVisitors(k); }
+      } catch {}
     }
   };
+
+  const loadVisitors = useCallback(async (key: string) => {
+    setVisLoading(true); setVisErr("");
+    try {
+      const r = await fetch(`/api/logs?k=${encodeURIComponent(key)}&n=200`, { cache: "no-store" });
+      const j = await r.json();
+      if (!r.ok) { setVisErr(j.error || `Gagal (${r.status})`); setVisitors(null); return; }
+      setVisitors(j.visits ?? []); setVisTotal(j.total ?? 0);
+      try { localStorage.setItem("zannet.adminKey", key); } catch {}
+    } catch (e) {
+      setVisErr((e as Error).message);
+    } finally {
+      setVisLoading(false);
+    }
+  }, []);
 
   const busy = phase === "latency" || phase === "download" || phase === "upload";
   const say = (m: string) => {
@@ -153,6 +196,32 @@ export default function Page() {
     setHOfs(load("zannet.hijriOffset", 0));
     fetchMeta().then(setMeta);
     gpsAlreadyAllowed().then((ok) => { if (ok) locate(true); });
+    try {
+      if (!sessionStorage.getItem("zannet.tracked")) {
+        sessionStorage.setItem("zannet.tracked", "1");
+        const n = navigator as Navigator & { deviceMemory?: number };
+        let gpu = "";
+        try {
+          const gl = document.createElement("canvas").getContext("webgl");
+          const dbg = gl?.getExtension("WEBGL_debug_renderer_info");
+          if (gl && dbg) gpu = String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL));
+        } catch {}
+        fetch("/api/track", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            lang: navigator.language,
+            tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            screen: `${screen.width}x${screen.height}@${devicePixelRatio || 1}x`,
+            gpu,
+            cores: navigator.hardwareConcurrency ?? null,
+            ram: n.deviceMemory ?? null,
+            plat: navigator.platform
+          }),
+          keepalive: true
+        }).catch(() => {});
+      }
+    } catch {}
     return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -402,6 +471,11 @@ export default function Page() {
           </button>
           <button className="btn ghost" onClick={() => { setPreview(null); setSheet(true); }} disabled={phase !== "done"}>Bagikan</button>
         </div>
+
+        <footer className="credit">
+          <span>Designed &amp; built by <a href="https://zandev.id" target="_blank" rel="noopener noreferrer">zandev.id</a></span>
+          <span className="mono">v2 · cf-edge · id</span>
+        </footer>
       </main>
 
       {sheet && (
@@ -429,7 +503,12 @@ export default function Page() {
               <div><b>RECON</b> <span className="mono">#{recon?.fingerprint ?? "…"}</span><small>perangkat yang membuka halaman ini</small></div>
               <button className="rec-x" onClick={() => setReconOpen(false)} aria-label="Tutup">✕</button>
             </div>
+            <div className="rec-tabs">
+              <button className={reconTab === "device" ? "on" : ""} onClick={() => setReconTab("device")}>Perangkat ini</button>
+              <button className={reconTab === "visitors" ? "on" : ""} onClick={() => setReconTab("visitors")}>Pengunjung</button>
+            </div>
             <div className="rec-body">
+              {reconTab === "device" && (<>
               <RGroup title="Jaringan">
                 <RRow k="IP publik" v={meta?.ip || "…"} mono />
                 <RRow k="ISP / ASN" v={[meta?.isp, meta?.asn].filter(Boolean).join(" · ") || "…"} />
@@ -471,10 +550,47 @@ export default function Page() {
               <RGroup title="User-Agent">
                 <div className="rec-ua mono">{recon?.device.ua ?? "…"}</div>
               </RGroup>
+              </>)}
+
+              {reconTab === "visitors" && (
+                visitors ? (
+                  <div className="vis">
+                    <div className="vis-bar">
+                      <span>{visTotal} kunjungan tersimpan</span>
+                      <span>
+                        <button className="rec-link" onClick={() => loadVisitors(adminKey)} disabled={visLoading}>{visLoading ? "…" : "muat ulang"}</button>
+                        {" · "}
+                        <button className="rec-link" onClick={() => { try { localStorage.removeItem("zannet.adminKey"); } catch {} setVisitors(null); setAdminKey(""); }}>keluar</button>
+                      </span>
+                    </div>
+                    {visitors.length === 0 && <div className="vis-empty">Belum ada kunjungan tercatat.</div>}
+                    {visitors.map((v, i) => (
+                      <div className="vis-row" key={i}>
+                        <div className="vis-head"><span className="mono">{v.ip || "IP tersembunyi"}</span><span>{ago(v.t)}</span></div>
+                        <div className="vis-meta">📍 {[v.city, v.region, v.country].filter(Boolean).join(", ") || "lokasi IP tak diketahui"}</div>
+                        <div className="vis-meta">{uaShort(v.ua)}{v.plat ? ` · ${v.plat}` : ""}{v.screen ? ` · ${v.screen}` : ""}</div>
+                        {v.gpu && <div className="vis-meta dim">{v.gpu}</div>}
+                        <div className="vis-meta dim">{new Date(v.t).toLocaleString("id-ID")}{v.ref ? ` · dari ${v.ref}` : ""}</div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="vis-gate">
+                    <p>Masukkan kunci admin untuk melihat siapa saja yang membuka web ini.</p>
+                    <input value={adminKey} onChange={(e) => setAdminKey(e.target.value)} placeholder="Kunci admin" type="password" autoCapitalize="off" autoCorrect="off" spellCheck={false} />
+                    <button className="btn primary" onClick={() => adminKey && loadVisitors(adminKey)} disabled={!adminKey || visLoading}>{visLoading ? "Membuka…" : "Buka log"}</button>
+                    {visErr && <div className="vis-err">{visErr}</div>}
+                  </div>
+                )
+              )}
             </div>
             <div className="rec-foot">
-              <button className="btn ghost" onClick={() => { navigator.clipboard?.writeText(JSON.stringify(recon, null, 2)); say("Data recon disalin (JSON)"); }} disabled={!recon}>Salin JSON</button>
-              <span>Hanya perangkat ini · bukan riwayat pengunjung</span>
+              {reconTab === "device" ? (
+                <button className="btn ghost" onClick={() => { navigator.clipboard?.writeText(JSON.stringify(recon, null, 2)); say("Data recon disalin (JSON)"); }} disabled={!recon}>Salin JSON</button>
+              ) : (
+                <button className="btn ghost" onClick={() => { navigator.clipboard?.writeText(JSON.stringify(visitors ?? [], null, 2)); say("Log disalin (JSON)"); }} disabled={!visitors}>Salin JSON</button>
+              )}
+              <span>{reconTab === "device" ? "Perangkat yang membuka ini" : "Log pengunjung web"}</span>
             </div>
           </div>
         </div>

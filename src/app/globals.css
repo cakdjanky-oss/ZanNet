@@ -217,3 +217,28 @@ button, input { font: inherit; color: inherit; }
 }
 .rec-foot .btn { height: 40px; padding: 0 16px; font-size: 14px; }
 .rec-foot span { font-size: 10px; color: var(--faint); text-align: right; }
+
+/* ===== tab & log pengunjung di panel recon ===== */
+.rec-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 10px 16px 0; }
+.rec-tabs button { height: 36px; border-radius: 12px; border: 1px solid var(--edge); background: var(--glass); color: var(--sub); font-size: 13px; font-weight: 600; cursor: pointer; }
+.rec-tabs button.on { background: var(--glass-hi); color: var(--down); border-color: rgba(60,240,255,0.4); }
+.vis { display: grid; gap: 8px; }
+.vis-bar { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--sub); padding: 0 2px 2px; }
+.vis-empty, .vis-err { color: var(--sub); font-size: 12.5px; padding: 8px 2px; }
+.vis-err { color: var(--bad); }
+.vis-row { border: 1px solid var(--edge); border-radius: 14px; background: var(--glass); padding: 9px 12px; display: grid; gap: 3px; }
+.vis-head { display: flex; justify-content: space-between; align-items: baseline; }
+.vis-head .mono { color: var(--lat); font-size: 13px; }
+.vis-head span:last-child { font-size: 10.5px; color: var(--sub); }
+.vis-meta { font-size: 11.5px; color: var(--txt); word-break: break-word; }
+.vis-meta.dim { color: var(--faint); font-size: 10.5px; }
+.vis-gate { display: grid; gap: 12px; padding: 20px 4px; text-align: center; }
+.vis-gate p { font-size: 13px; color: var(--sub); }
+.vis-gate input { height: 46px; border-radius: 14px; border: 1px solid var(--edge); background: var(--glass); padding: 0 14px; font-size: 15px; text-align: center; }
+
+/* footer credit */
+.credit { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 4px 0; font-size: 10.5px; color: var(--faint); }
+.credit a { color: var(--down); text-decoration: none; font-weight: 600; }
+.credit .mono { font-size: 9.5px; letter-spacing: 0.02em; }
+@media (max-height: 700px) { .credit .mono { display: none; } }
+@media (max-height: 620px) { .credit { display: none; } }
